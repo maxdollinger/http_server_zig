@@ -3,6 +3,8 @@ const std = @import("std");
 const net = std.net;
 const print = std.debug.print;
 
+const Response = @import("./response.zig");
+
 pub fn main() !void {
 
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -15,6 +17,18 @@ pub fn main() !void {
     });
     defer listener.deinit();
 
-    _ = try listener.accept();
-    print("client connected!", .{});
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var connection = try listener.accept();
+    print("client connected!\n", .{});
+
+    var response = Response.Response.init(Response.HttpStatus.OK);
+    const responseBuffer = try allocator.alloc(u8, 1024);
+    const answer = try response.serialize(responseBuffer);
+    print("sending: {s}", .{answer});
+    try connection.stream.writeAll(answer);
+    connection.stream.close();
+    print("server closed!\n", .{});
 }
