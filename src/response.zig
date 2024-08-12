@@ -34,7 +34,7 @@ pub const Response = struct {
     pub fn serialize(self: *Response, buffer: []u8) ![]const u8 {
         var stream = io.fixedBufferStream(buffer);
         const writer = stream.writer();
-        try fmt.format(writer, "{s} {s} \r\n{s}\r\n{s}", .{ self.version.toString(), self.status.toString(), self.headers, self.body });
+        try fmt.format(writer, "{s} {s}\r\n{s}\r\n{s}", .{ self.version.toString(), self.status.toString(), self.headers, self.body });
 
         return stream.getWritten();
     }
