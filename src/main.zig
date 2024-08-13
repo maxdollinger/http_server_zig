@@ -28,6 +28,13 @@ fn handleConnection(connection: *std.net.Server.Connection) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
+    var requestBuffer = try allocator.alloc(u8, 1024);
+    const bytesRead = try connection.stream.read(requestBuffer);
+
+    print("{s}", .{requestBuffer[0..bytesRead]});
+    const request = http.Request.parse(requestBuffer[0..bytesRead]);
+    print("{any}", .{request});
+
     var response = http.Response.init(http.HttpStatus.OK);
     const responseBuffer = try allocator.alloc(u8, 1024);
     const answer = try response.serialize(responseBuffer);
