@@ -17,16 +17,20 @@ pub fn main() !void {
 
     print("server startet on {s}:{d}\n", .{ IP, PORT });
     while (true) {
-        var connection = server.accept() catch {
+        const connection = server.accept() catch {
             print("failes to accept connection", .{});
             continue;
         };
 
-        try handleConnection(&connection);
+        _ = std.Thread.spawn(.{}, handleConnection, .{connection}) catch |err| {
+            print("{s}\n", .{@errorName(err)});
+        };
     }
 }
 
-fn handleConnection(connection: *std.net.Server.Connection) !void {
+fn handleConnection(connection: std.net.Server.Connection) void {
+    defer connection.stream.close();
+
     print("client connected!\n", .{});
     var reqBuf = [_]u8{0} ** 1024;
     var reqStream = std.io.fixedBufferStream(&reqBuf);
@@ -34,9 +38,11 @@ fn handleConnection(connection: *std.net.Server.Connection) !void {
     var resStream = std.io.fixedBufferStream(&resBuf);
 
     const reqMeta = readRequestMeta(connection.stream.reader(), &reqStream) catch |err| {
-        const res = try createResponse(&resStream, "400 Bad Request", @errorName(err));
+        const res = createResponse(&resStream, "400 Bad Request", @errorName(err));
         print("sending response:\n------\n{s}\n-----\n", .{res});
-        try connection.stream.writeAll(res);
+        connection.stream.writeAll(res) catch |writeErr| {
+            print("{s}\n", .{@errorName(writeErr)});
+        };
         return;
     };
 
@@ -49,31 +55,31 @@ fn handleConnection(connection: *std.net.Server.Connection) !void {
             const USER_AGENT = "User-Agent: ";
             if (std.ascii.startsWithIgnoreCase(line, USER_AGENT)) userAgentHeader = line[USER_AGENT.len..];
         }
-        res = try createResponse(&resStream, "200 OK", userAgentHeader);
+        res = createResponse(&resStream, "200 OK", userAgentHeader);
     } else if (std.mem.startsWith(u8, target, "/echo/")) {
         const string = std.mem.trimLeft(u8, target, "/echo/");
-        res = try createResponse(&resStream, "200 OK", string);
+        res = createResponse(&resStream, "200 OK", string);
     } else if (std.mem.eql(u8, target, "/")) {
-        res = try createResponse(&resStream, "200 OK", "");
+        res = createResponse(&resStream, "200 OK", "");
     } else {
-        res = try createResponse(&resStream, "404 Not Found", "");
+        res = createResponse(&resStream, "404 Not Found", "");
     }
 
     print("sending response:\n------\n{s}\n-----\n", .{res});
-    try connection.stream.writeAll(res);
+    connection.stream.writeAll(res) catch |err| {
+        print("{s}\n", .{@errorName(err)});
+    };
     print("closing connection!\n", .{});
-    connection.stream.close();
 }
 
-fn createResponse(stream: *std.io.FixedBufferStream([]u8), status: []const u8, body: []const u8) ![]const u8 {
+fn createResponse(stream: *std.io.FixedBufferStream([]u8), status: []const u8, body: []const u8) []const u8 {
     const writer = stream.writer();
 
-    try writer.print("HTTP/1.1 {s}\r\n", .{status});
-    try writer.print("Connection: close\r\n", .{});
-    try writer.print("Content-Type: text/plain\r\n", .{});
-    try writer.print("Content-Length: {d}\r\n", .{body.len});
-    try writer.print("\r\n", .{});
-    try writer.print("{s}", .{body});
+    writer.print("HTTP/1.1 {s}\r\n", .{status}) catch {};
+    writer.print("Content-Type: text/plain\r\n", .{}) catch {};
+    writer.print("Content-Length: {d}\r\n", .{body.len}) catch {};
+    writer.print("\r\n", .{}) catch {};
+    writer.print("{s}", .{body}) catch {};
 
     return stream.getWritten();
 }
