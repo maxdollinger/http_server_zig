@@ -40,16 +40,20 @@ fn handleConnection(connection: *std.net.Server.Connection) !void {
         return;
     };
 
+    var res: []const u8 = undefined;
     const target = findtarget(reqMeta);
-    if (std.mem.eql(u8, target, "/")) {
-        const res = try createResponse(&resStream, "200 OK", "");
+    if (std.mem.startsWith(u8, target, "/echo/")) {
+        const string = std.mem.trimLeft(u8, target, "/echo/");
+        res = try createResponse(&resStream, "200 OK", string);
+    } else if (std.mem.eql(u8, target, "/")) {
+        res = try createResponse(&resStream, "200 OK", "");
         print("sending response:\n------\n{s}\n-----\n", .{res});
-        try connection.stream.writeAll(res);
     } else {
-        const res = try createResponse(&resStream, "404 Not Found", "");
+        res = try createResponse(&resStream, "404 Not Found", "");
         print("sending response:\n------\n{s}\n-----\n", .{res});
-        try connection.stream.writeAll(res);
     }
+
+    try connection.stream.writeAll(res);
     print("closing connection!\n", .{});
     connection.stream.close();
 }
@@ -59,7 +63,7 @@ fn createResponse(stream: *std.io.FixedBufferStream([]u8), status: []const u8, b
 
     try writer.print("HTTP/1.1 {s}\r\n", .{status});
     try writer.print("Connection: close\r\n", .{});
-    try writer.print("Content-Type: text/html\r\n", .{});
+    try writer.print("Content-Type: text/plain\r\n", .{});
     try writer.print("Content-Length: {d}\r\n", .{body.len});
     try writer.print("\r\n", .{});
     try writer.print("{s}", .{body});
