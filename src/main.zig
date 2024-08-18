@@ -42,7 +42,14 @@ fn handleConnection(connection: *std.net.Server.Connection) !void {
 
     var res: []const u8 = undefined;
     const target = findtarget(reqMeta);
-    if (std.mem.startsWith(u8, target, "/echo/")) {
+    if (std.mem.eql(u8, target, "/user-agent")) {
+        var iter = std.mem.splitSequence(u8, reqMeta, "\r\n");
+        var userAgentHeader: []const u8 = undefined;
+        while (iter.next()) |line| {
+            if (std.ascii.startsWithIgnoreCase(line, "user-agent: ")) userAgentHeader = line[12..];
+        }
+        res = try createResponse(&resStream, "200 OK", userAgentHeader);
+    } else if (std.mem.startsWith(u8, target, "/echo/")) {
         const string = std.mem.trimLeft(u8, target, "/echo/");
         res = try createResponse(&resStream, "200 OK", string);
     } else if (std.mem.eql(u8, target, "/")) {
