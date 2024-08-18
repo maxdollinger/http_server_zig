@@ -58,6 +58,7 @@ fn handleConnection(connection: std.net.Server.Connection) void {
         res = createResponse(&resStream, "200 OK", userAgentHeader);
     } else if (std.mem.startsWith(u8, target, "/echo/")) {
         const string = std.mem.trimLeft(u8, target, "/echo/");
+        print("recieved echo string: {s}\n", .{string});
         res = createResponse(&resStream, "200 OK", string);
     } else if (std.mem.eql(u8, target, "/")) {
         res = createResponse(&resStream, "200 OK", "");
