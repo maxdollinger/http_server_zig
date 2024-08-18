@@ -46,7 +46,8 @@ fn handleConnection(connection: *std.net.Server.Connection) !void {
         var iter = std.mem.splitSequence(u8, reqMeta, "\r\n");
         var userAgentHeader: []const u8 = undefined;
         while (iter.next()) |line| {
-            if (std.ascii.startsWithIgnoreCase(line, "user-agent: ")) userAgentHeader = line[12..];
+            const USER_AGENT = "User-Agent: ";
+            if (std.ascii.startsWithIgnoreCase(line, USER_AGENT)) userAgentHeader = line[USER_AGENT.len..];
         }
         res = try createResponse(&resStream, "200 OK", userAgentHeader);
     } else if (std.mem.startsWith(u8, target, "/echo/")) {
@@ -54,12 +55,11 @@ fn handleConnection(connection: *std.net.Server.Connection) !void {
         res = try createResponse(&resStream, "200 OK", string);
     } else if (std.mem.eql(u8, target, "/")) {
         res = try createResponse(&resStream, "200 OK", "");
-        print("sending response:\n------\n{s}\n-----\n", .{res});
     } else {
         res = try createResponse(&resStream, "404 Not Found", "");
-        print("sending response:\n------\n{s}\n-----\n", .{res});
     }
 
+    print("sending response:\n------\n{s}\n-----\n", .{res});
     try connection.stream.writeAll(res);
     print("closing connection!\n", .{});
     connection.stream.close();
