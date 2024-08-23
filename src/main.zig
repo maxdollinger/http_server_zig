@@ -92,7 +92,7 @@ fn handleEcho(req: *http.Request, res: *http.Result) void {
     print("recieved echo string: {s}\n", .{echo});
 
     if (req.header.findHeader(http.Header.AcceptEncoding)) |value| {
-        if (std.mem.eql(u8, value, "gzip")) {
+        if (std.mem.count(u8, value, "gzip") > 0) {
             res.header.add(http.Header.ContentEncoding, "gzip");
         }
     }
