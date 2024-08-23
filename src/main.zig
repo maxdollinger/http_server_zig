@@ -93,11 +93,16 @@ fn handleEcho(req: *http.Request, res: *http.Result) void {
 
     if (req.header.findHeader(http.Header.AcceptEncoding)) |value| {
         if (std.mem.count(u8, value, "gzip") > 0) {
+            var buf: [512]u8 = undefined;
             res.header.add(http.Header.ContentEncoding, "gzip");
+            var in = std.io.fixedBufferStream(echo);
+            var out = std.io.fixedBufferStream(&buf);
+            std.compress.gzip.compress(in.reader(), out.writer(), .{}) catch {};
+            res.writeBody(out.getWritten());
         }
+    } else {
+        res.writeBody(echo);
     }
-
-    res.writeBody(echo);
 }
 
 fn matchUserAgent(req: *http.Request) bool {
