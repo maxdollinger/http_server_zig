@@ -2,10 +2,12 @@ const std = @import("std");
 // Uncomment this block to pass the first stage
 const net = std.net;
 const print = std.debug.print;
+const http = @import("./http.zig");
+const Router = @import("./router.zig");
 
 const IP = "127.0.0.1";
 const PORT = 4221;
-var folder: []const u8 = undefined;
+var assets: []const u8 = undefined;
 
 const ServerError = error{
     missingArg,
@@ -15,8 +17,8 @@ pub fn main() !void {
     var argIter = std.process.args();
     while (argIter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--directory")) {
-            if (argIter.next()) |folderArg| {
-                folder = folderArg;
+            if (argIter.next()) |path| {
+                assets = path;
             }
             break;
         }
@@ -31,123 +33,135 @@ pub fn main() !void {
 
     print("server startet on {s}:{d}\n", .{ IP, PORT });
     while (true) {
-        const connection = server.accept() catch {
-            print("failes to accept connection", .{});
+        const connection = server.accept() catch |err| {
+            print("failed to accept connection: {s}\n", .{@errorName(err)});
             continue;
         };
 
         _ = std.Thread.spawn(.{}, handleConnection, .{connection}) catch |err| {
-            print("{s}\n", .{@errorName(err)});
+            print("failed to spawn thread: {s}\n", .{@errorName(err)});
         };
     }
 }
 
 fn handleConnection(connection: std.net.Server.Connection) void {
-    defer connection.stream.close();
-
     print("client connected!\n", .{});
-    var reqBuf = [_]u8{0} ** 1024;
-    var reqStream = std.io.fixedBufferStream(&reqBuf);
-    var resBuf = [_]u8{0} ** 1024;
-    var resStream = std.io.fixedBufferStream(&resBuf);
 
-    const reqMeta = readRequestMeta(connection.stream.reader(), &reqStream) catch |err| {
-        const res = createResponse(&resStream, "400 Bad Request", @errorName(err), "text/plain");
-        print("sending response:\n------\n{s}\n-----\n", .{res});
-        connection.stream.writeAll(res) catch |writeErr| {
-            print("{s}\n", .{@errorName(writeErr)});
-        };
-        return;
-    };
+    var buffer: [8192]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
 
-    var res: []const u8 = undefined;
-    const target = findtarget(reqMeta);
-    if (std.mem.startsWith(u8, target, "/files/")) {
-        if (folder.len == 0) {
-            print("asset folder not set", .{});
-            return;
-        }
+    var router = Router.Router.init(allocator);
+    router.addRoute(Router.Route{ .match = &matchFilesGet, .handler = &handleFilesGet });
+    router.addRoute(Router.Route{ .match = &matchFilesPost, .handler = &handleFilesPost });
+    router.addRoute(Router.Route{ .match = &matchUserAgent, .handler = &handleUserAgent });
+    router.addRoute(Router.Route{ .match = &matchEcho, .handler = &handleEcho });
+    router.addRoute(Router.Route{ .match = &matchRoot, .handler = &handleHome });
 
-        const fileName = std.mem.trimLeft(u8, target, "/files/");
-        var pathBuf = [_]u8{0} ** 512;
-        var pathStream = std.io.fixedBufferStream(&pathBuf);
-        const writer = pathStream.writer();
-        writer.writeAll(folder) catch {};
-        writer.writeAll(fileName) catch {};
-        const path = pathStream.getWritten();
+    var res = http.Result.init(allocator);
+    if (http.Request.parse(allocator, connection.stream.reader())) |val| {
+        var req = val;
+        print("request:\n{}\n", .{req});
 
-        print("opening path: {s}\n", .{path});
-        const fileHandle = std.fs.openFileAbsolute(path, .{ .mode = .read_only });
-
-        if (fileHandle) |handle| {
-            var fileBuf = [_]u8{0} ** 2048;
-            if (handle.readAll(&fileBuf)) |bytesRead| {
-                const file = fileBuf[0..bytesRead];
-                res = createResponse(&resStream, "200 OK", file, "application/octet-stream");
-            } else |err| {
-                res = createResponse(&resStream, "500 Interal Server Error", @errorName(err), "text/plain");
-            }
-        } else |err| {
-            print("error opening file: {s}\n", .{@errorName(err)});
-            res = createResponse(&resStream, "404 Not Found", "", "text/plain");
-        }
-    } else if (std.mem.eql(u8, target, "/user-agent")) {
-        var iter = std.mem.splitSequence(u8, reqMeta, "\r\n");
-        var userAgentHeader: []const u8 = undefined;
-        while (iter.next()) |line| {
-            const USER_AGENT = "User-Agent: ";
-            if (std.ascii.startsWithIgnoreCase(line, USER_AGENT)) userAgentHeader = line[USER_AGENT.len..];
-        }
-        res = createResponse(&resStream, "200 OK", userAgentHeader, "text/plain");
-    } else if (std.mem.startsWith(u8, target, "/echo/")) {
-        const string = std.mem.trimLeft(u8, target, "/echo/");
-        print("recieved echo string: {s}\n", .{string});
-        res = createResponse(&resStream, "200 OK", string, "text/plain");
-    } else if (std.mem.eql(u8, target, "/")) {
-        res = createResponse(&resStream, "200 OK", "", "text/plain");
-    } else {
-        res = createResponse(&resStream, "404 Not Found", "", "text/plain");
+        res.header.add("Connection", "close");
+        router.handle(&req, &res);
+    } else |err| {
+        res.status = http.Status.BAD_REQUEST;
+        res.writeBody(@errorName(err));
     }
 
-    print("sending response:\n------\n{s}\n-----\n", .{res});
-    connection.stream.writeAll(res) catch |err| {
-        print("{s}\n", .{@errorName(err)});
+    print("sending response:\n------\n{}\n-----\n", .{res});
+    connection.stream.writer().print("{}", .{res}) catch |err| {
+        print("failed to send response: {s}", .{@errorName(err)});
     };
     print("closing connection!\n", .{});
 }
 
-fn createResponse(stream: *std.io.FixedBufferStream([]u8), status: []const u8, body: []const u8, contentType: []const u8) []const u8 {
-    const writer = stream.writer();
-
-    writer.print("HTTP/1.1 {s}\r\n", .{status}) catch {};
-    writer.print("Content-Type: {s}\r\n", .{contentType}) catch {};
-    writer.print("Content-Length: {d}\r\n", .{body.len}) catch {};
-    writer.print("\r\n", .{}) catch {};
-    writer.print("{s}", .{body}) catch {};
-
-    return stream.getWritten();
+fn matchRoot(req: *http.Request) bool {
+    return std.mem.eql(u8, req.target, "/");
 }
 
-fn readRequestMeta(streamReader: std.net.Stream.Reader, reqStream: *std.io.FixedBufferStream([]u8)) ![]u8 {
-    const writer = reqStream.writer();
-    var last: u8 = 0;
-    while (true) {
-        const byte = try streamReader.readByte();
-        try writer.writeByte(byte);
+fn handleHome(_: *http.Request, _: *http.Result) void {}
 
-        if (byte == '\r' and last == '\n') {
-            break;
-        }
+fn matchEcho(req: *http.Request) bool {
+    return std.mem.startsWith(u8, req.target, "/echo/");
+}
 
-        last = byte;
+fn handleEcho(req: *http.Request, res: *http.Result) void {
+    const string = req.target[6..];
+    print("recieved echo string: {s}\n", .{string});
+    res.writeBody(string);
+}
+
+fn matchUserAgent(req: *http.Request) bool {
+    return std.mem.eql(u8, req.target, "/user-agent");
+}
+
+fn handleUserAgent(req: *http.Request, res: *http.Result) void {
+    const userAgentHeader = req.header.findHeader(http.Header.UserAgent) orelse "";
+    res.writeBody(userAgentHeader);
+}
+
+fn matchFilesGet(req: *http.Request) bool {
+    return std.mem.startsWith(u8, req.target, "/files/") and std.mem.eql(u8, req.method, "GET");
+}
+
+fn handleFilesGet(req: *http.Request, res: *http.Result) void {
+    if (assets.len == 0) {
+        print("asset folder not set", .{});
+        return;
     }
 
-    return reqStream.getWritten();
+    var pathBuf: [128]u8 = undefined;
+    const path = std.fmt.bufPrint(&pathBuf, "{s}{s}", .{ assets, req.target[7..] }) catch "print err";
+    print("working with path: {s}\n", .{path});
+
+    const fileHandle = std.fs.openFileAbsolute(path, .{ .mode = .read_only });
+    if (fileHandle) |handle| {
+        defer handle.close();
+        var fileBuf: [2048]u8 = undefined;
+
+        if (handle.readAll(&fileBuf)) |bytesRead| {
+            const file = fileBuf[0..bytesRead];
+            res.header.contentType("application/octet-stream");
+            res.writeBody(file);
+        } else |err| {
+            res.status = http.Status.NOT_FOUND;
+            res.writeBody(@errorName(err));
+        }
+    } else |err| {
+        print("error opening file: {s}\n", .{@errorName(err)});
+        res.status = http.Status.NOT_FOUND;
+        res.writeBody(@errorName(err));
+    }
 }
 
-fn findtarget(string: []const u8) []const u8 {
-    var splitIter = std.mem.splitScalar(u8, string, ' ');
-    _ = splitIter.next();
+fn matchFilesPost(req: *http.Request) bool {
+    return std.mem.startsWith(u8, req.target, "/files/") and std.mem.eql(u8, req.method, "POST");
+}
 
-    return splitIter.next() orelse "";
+fn handleFilesPost(req: *http.Request, res: *http.Result) void {
+    if (assets.len == 0) {
+        print("asset folder not set", .{});
+        return;
+    }
+
+    var pathBuf: [128]u8 = undefined;
+    const path = std.fmt.bufPrint(&pathBuf, "{s}{s}", .{ assets, req.target[7..] }) catch "print err";
+    print("working with path: {s}\n", .{path});
+
+    const file = std.fs.createFileAbsolute(path, .{}) catch |err| {
+        res.status = http.Status.SERVER_ERROR;
+        res.writeBody(@errorName(err));
+        return;
+    };
+    defer file.close();
+
+    file.writeAll(req.body) catch |err| {
+        res.status = http.Status.SERVER_ERROR;
+        res.writeBody(@errorName(err));
+        return;
+    };
+
+    res.status = http.Status.CREATED;
 }
