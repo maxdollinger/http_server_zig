@@ -9,26 +9,11 @@ const IP = "127.0.0.1";
 const PORT = 4221;
 var assets: []const u8 = undefined;
 
-const ServerError = error{
-    missingArg,
-};
-
 pub fn main() !void {
-    var argIter = std.process.args();
-    while (argIter.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--directory")) {
-            if (argIter.next()) |path| {
-                assets = path;
-            }
-            break;
-        }
-    }
+    getAssetFolder();
 
-    // Uncomment this block to pass the first stage
     const address = try net.Address.resolveIp(IP, PORT);
-    var server = try address.listen(.{
-        .reuse_address = true,
-    });
+    var server = try address.listen(.{ .reuse_address = true });
     defer server.deinit();
 
     print("server startet on {s}:{d}\n", .{ IP, PORT });
@@ -38,9 +23,24 @@ pub fn main() !void {
             continue;
         };
 
-        _ = std.Thread.spawn(.{}, handleConnection, .{connection}) catch |err| {
+        const thread = std.Thread.spawn(.{}, handleConnection, .{connection}) catch |err| {
             print("failed to spawn thread: {s}\n", .{@errorName(err)});
+            connection.stream.close();
+            continue;
         };
+        thread.detach();
+    }
+}
+
+fn getAssetFolder() void {
+    var argIter = std.process.args();
+    while (argIter.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--directory")) {
+            if (argIter.next()) |path| {
+                assets = path;
+            }
+            break;
+        }
     }
 }
 
@@ -88,9 +88,16 @@ fn matchEcho(req: *http.Request) bool {
 }
 
 fn handleEcho(req: *http.Request, res: *http.Result) void {
-    const string = req.target[6..];
-    print("recieved echo string: {s}\n", .{string});
-    res.writeBody(string);
+    const echo = req.target[6..];
+    print("recieved echo string: {s}\n", .{echo});
+
+    if (req.header.findHeader(http.Header.AcceptEncoding)) |value| {
+        if (std.mem.eql(u8, value, "gzip")) {
+            res.header.add(http.Header.ContentEncoding, "gzip");
+        }
+    }
+
+    res.writeBody(echo);
 }
 
 fn matchUserAgent(req: *http.Request) bool {

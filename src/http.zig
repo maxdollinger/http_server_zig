@@ -4,7 +4,9 @@ const assert = std.debug.assert;
 pub const Header = struct {
     pub const ContentType: []const u8 = "Content-Type";
     pub const ContentLength: []const u8 = "Content-Length";
+    pub const ContentEncoding: []const u8 = "Content-Encoding";
     pub const UserAgent: []const u8 = "User-Agent";
+    pub const AcceptEncoding: []const u8 = "Accept-Encoding";
 };
 
 pub const Headers = struct {
